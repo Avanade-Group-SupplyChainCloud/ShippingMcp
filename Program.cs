@@ -5,6 +5,10 @@ using ModelContextProtocol.Server;
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddMcpServer().WithHttpTransport().WithTools<Tools>();
 var app = builder.Build();
+
+// Add this line for a health check endpoint:
+app.MapGet("/health", () => Results.Ok("Healthy")); // <-- THIS IS THE HEALTH CHECK
+
 app.MapMcp();
 app.Run();
 
