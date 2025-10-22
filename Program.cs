@@ -3,127 +3,169 @@ using System.ComponentModel;
 using ModelContextProtocol.Server;
 
 var builder = WebApplication.CreateBuilder(args);
-
-// Register MCP + HTTP transport + your tools (one line is fine)
 builder.Services.AddMcpServer().WithHttpTransport().WithTools<Tools>();
-
 var app = builder.Build();
-
-// Map the MCP JSON-RPC transport at the ROOT "/"
 app.MapMcp();
-
 app.Run();
-
-// -------------------- Tools --------------------
 
 public class Tools
 {
     private static readonly ConcurrentDictionary<string, object> Store = new();
 
-    private static readonly Dictionary<string, HashSet<string>> CarrierServices = new(
-        StringComparer.OrdinalIgnoreCase
-    )
+    // Define your setup steps here - easily scale to 10+ steps
+    private static readonly List<SetupStep> Steps = new()
     {
-        ["UPS"] = new(["Ground", "2Day"], StringComparer.OrdinalIgnoreCase),
-        ["FedEx"] = new(["Air", "Overnight"], StringComparer.OrdinalIgnoreCase),
+        new("carrier", "carrier_create", new[] { "carrier", "service" }),
+        new("service_options", "set_service_options", new[] { "insurance", "signature" }),
+        new("label", "label_set", new[] { "label_size" }),
+        new("printer", "printer_set", new[] { "printer_name" }),
+        new("notification", "notification_set", new[] { "email" }),
     };
 
-    private static readonly HashSet<string> AllowedLabelSizes = new(
-        new[] { "4x6", "6x9" },
-        StringComparer.OrdinalIgnoreCase
-    );
+    private static readonly Dictionary<string, HashSet<string>> CarrierServices = new()
+    {
+        ["UPS"] = new(["Ground", "2Day"]),
+        ["FedEx"] = new(["Air", "Overnight"]),
+    };
 
-    // PLAN-AS-A-TOOL (so no [McpResource] needed)
-    [McpServerTool, Description("Return ordered steps. Thi is how to setup Ship.")]
-    public object get_plan() =>
-        new ExecutionPlan
-        {
-            version = "1.0",
-            onFailure = "stop-and-ask",
-            steps = new[]
-            {
-                new ExecutionStep
-                {
-                    id = "carrier",
-                    tool = "carrier_create",
-                    inputs = ["carrier", "service"],
-                },
-                new ExecutionStep
-                {
-                    id = "label",
-                    tool = "label_set",
-                    inputs = ["label_size"],
-                },
-            },
-        };
+    // -------------------- Core Tools --------------------
 
-    [McpServerTool, Description("List supported carriers, services, and label sizes.")]
-    public object list_supported() =>
+    [McpServerTool, Description("Get ordered setup steps")]
+    public object plan() =>
         new
         {
-            carriers = CarrierServices.ToDictionary(
-                kvp => kvp.Key,
-                kvp => kvp.Value.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray(),
-                StringComparer.OrdinalIgnoreCase
-            ),
-            labelSizes = AllowedLabelSizes
-                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            steps = Steps
+                .Select(
+                    (s, i) =>
+                        new
+                        {
+                            order = i + 1,
+                            s.id,
+                            s.tool,
+                            s.inputs,
+                        }
+                )
                 .ToArray(),
         };
 
-    [McpServerTool, Description("Create a carrier with a service.")]
-    public object carrier_create(string carrier, string service)
+    [McpServerTool, Description("Get current progress")]
+    public object status()
     {
-        if (string.IsNullOrWhiteSpace(carrier))
-            return new { ok = false, error = "carrier is required" };
-        if (string.IsNullOrWhiteSpace(service))
-            return new { ok = false, error = "service is required" };
+        var completed = Steps.Where(s => Store.ContainsKey(s.id)).Select(s => s.id).ToArray();
+        var next = Steps.FirstOrDefault(s => !Store.ContainsKey(s.id));
 
-        if (!CarrierServices.TryGetValue(carrier.Trim(), out var allowed))
-            return new { ok = false, error = "unsupported carrier (UPS, FedEx)" };
+        return new
+        {
+            done = completed,
+            next = next?.tool,
+            ready = next == null,
+        };
+    }
 
-        if (!allowed.Contains(service.Trim()))
+    [McpServerTool, Description("Preview config before saving")]
+    public object preview()
+    {
+        var config = Steps.ToDictionary(
+            s => s.id,
+            s => Store.ContainsKey(s.id) ? Store[s.id] : null
+        );
+        var missing = Steps.Where(s => !Store.ContainsKey(s.id)).Select(s => s.id).ToArray();
+
+        return new
+        {
+            config,
+            missing,
+            valid = missing.Length == 0,
+        };
+    }
+
+    [McpServerTool, Description("Save all config")]
+    public object commit()
+    {
+        var prev = preview();
+        var validProp = prev.GetType().GetProperty("valid")?.GetValue(prev);
+
+        if (validProp is false)
             return new
             {
                 ok = false,
-                error = $"unsupported service for {carrier} (allowed: {string.Join(", ", allowed)})",
+                error = "Incomplete",
+                details = prev,
             };
 
-        var saved = new { carrier, service };
-        Store["carrier"] = saved;
-        return new { ok = true, saved };
+        Store["committed"] = DateTime.UtcNow;
+        return new { ok = true, saved = prev };
     }
 
-    [McpServerTool, Description("Set label size.")]
-    public object label_set(string label_size)
+    // -------------------- Step Tools --------------------
+
+    [McpServerTool, Description("Step 1: Create carrier")]
+    public object carrier_create(string carrier, string service)
+    {
+        if (!CarrierServices.ContainsKey(carrier))
+            return new
+            {
+                ok = false,
+                error = $"Invalid carrier. Use: {string.Join(", ", CarrierServices.Keys)}",
+            };
+
+        if (!CarrierServices[carrier].Contains(service))
+            return new { ok = false, error = $"Invalid service for {carrier}" };
+
+        Store["carrier"] = new { carrier, service };
+        return new { ok = true, next = Steps[1].tool };
+    }
+
+    [McpServerTool, Description("Step 2: Set service options")]
+    public object set_service_options(bool insurance, bool signature)
     {
         if (!Store.ContainsKey("carrier"))
-            return new { ok = false, error = "carrier not created yet; run carrier_create first" };
+            return new { ok = false, error = "Run carrier_create first" };
 
-        if (string.IsNullOrWhiteSpace(label_size))
-            return new { ok = false, error = "label_size is required" };
+        Store["service_options"] = new { insurance, signature };
+        return new { ok = true, next = Steps[2].tool };
+    }
 
-        if (!AllowedLabelSizes.Contains(label_size.Trim()))
-            return new { ok = false, error = "unsupported label_size (allowed: 4x6, 6x9)" };
+    [McpServerTool, Description("Step 3: Set label size")]
+    public object label_set(string label_size)
+    {
+        if (!Store.ContainsKey("service_options"))
+            return new { ok = false, error = "Run set_service_options first" };
 
-        var saved = new { size = label_size };
-        Store["label"] = saved;
-        return new { ok = true, saved };
+        if (label_size != "4x6" && label_size != "6x9")
+            return new { ok = false, error = "Use: 4x6 or 6x9" };
+
+        Store["label"] = new { size = label_size };
+        return new { ok = true, next = Steps[3].tool };
+    }
+
+    [McpServerTool, Description("Step 4: Set printer")]
+    public object printer_set(string printer_name)
+    {
+        if (!Store.ContainsKey("label"))
+            return new { ok = false, error = "Run label_set first" };
+
+        Store["printer"] = new { name = printer_name };
+        return new { ok = true, next = Steps[4].tool };
+    }
+
+    [McpServerTool, Description("Step 5: Set notification email")]
+    public object notification_set(string email)
+    {
+        if (!Store.ContainsKey("printer"))
+            return new { ok = false, error = "Run printer_set first" };
+
+        Store["notification"] = new { email };
+        return new { ok = true, next = "commit" };
+    }
+
+    [McpServerTool, Description("Reset everything")]
+    public object reset()
+    {
+        Store.Clear();
+        return new { ok = true };
     }
 }
 
-// -------------------- Models (for get_plan) --------------------
-
-public record ExecutionPlan
-{
-    public string version { get; init; } = "1.0";
-    public string onFailure { get; init; } = "stop-and-ask";
-    public ExecutionStep[] steps { get; init; } = [];
-}
-
-public record ExecutionStep
-{
-    public string id { get; init; } = "";
-    public string tool { get; init; } = "";
-    public string[] inputs { get; init; } = [];
-}
+// -------------------- Model --------------------
+public record SetupStep(string id, string tool, string[] inputs);
