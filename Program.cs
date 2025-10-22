@@ -6,8 +6,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddMcpServer().WithHttpTransport().WithTools<Tools>();
 var app = builder.Build();
 
-// Add this line for a health check endpoint:
-app.MapGet("/health", () => Results.Ok("Healthy")); // <-- THIS IS THE HEALTH CHECK
+app.MapGet("/health", () => Results.Ok("Healthy"));
 
 app.MapMcp();
 app.Run();
@@ -16,94 +15,13 @@ public class Tools
 {
     private static readonly ConcurrentDictionary<string, object> Store = new();
 
-    // Define your setup steps here - easily scale to 10+ steps
-    private static readonly List<SetupStep> Steps = new()
-    {
-        new("carrier", "carrier_create", new[] { "carrier", "service" }),
-        new("service_options", "set_service_options", new[] { "insurance", "signature" }),
-        new("label", "label_set", new[] { "label_size" }),
-        new("printer", "printer_set", new[] { "printer_name" }),
-        new("notification", "notification_set", new[] { "email" }),
-    };
-
     private static readonly Dictionary<string, HashSet<string>> CarrierServices = new()
     {
         ["UPS"] = new(["Ground", "2Day"]),
         ["FedEx"] = new(["Air", "Overnight"]),
     };
 
-    // -------------------- Core Tools --------------------
-
-    [McpServerTool, Description("Get ordered setup steps")]
-    public object plan() =>
-        new
-        {
-            steps = Steps
-                .Select(
-                    (s, i) =>
-                        new
-                        {
-                            order = i + 1,
-                            s.id,
-                            s.tool,
-                            s.inputs,
-                        }
-                )
-                .ToArray(),
-        };
-
-    [McpServerTool, Description("Get current progress")]
-    public object status()
-    {
-        var completed = Steps.Where(s => Store.ContainsKey(s.id)).Select(s => s.id).ToArray();
-        var next = Steps.FirstOrDefault(s => !Store.ContainsKey(s.id));
-
-        return new
-        {
-            done = completed,
-            next = next?.tool,
-            ready = next == null,
-        };
-    }
-
-    [McpServerTool, Description("Preview config before saving")]
-    public object preview()
-    {
-        var config = Steps.ToDictionary(
-            s => s.id,
-            s => Store.ContainsKey(s.id) ? Store[s.id] : null
-        );
-        var missing = Steps.Where(s => !Store.ContainsKey(s.id)).Select(s => s.id).ToArray();
-
-        return new
-        {
-            config,
-            missing,
-            valid = missing.Length == 0,
-        };
-    }
-
-    [McpServerTool, Description("Save all config")]
-    public object commit()
-    {
-        var prev = preview();
-        var validProp = prev.GetType().GetProperty("valid")?.GetValue(prev);
-
-        if (validProp is false)
-            return new
-            {
-                ok = false,
-                error = "Incomplete",
-                details = prev,
-            };
-
-        Store["committed"] = DateTime.UtcNow;
-        return new { ok = true, saved = prev };
-    }
-
-    // -------------------- Step Tools --------------------
-
-    [McpServerTool, Description("Step 1: Create carrier")]
+    [McpServerTool, Description("Create or update carrier configuration")]
     public object carrier_create(string carrier, string service)
     {
         if (!CarrierServices.ContainsKey(carrier))
@@ -114,62 +32,44 @@ public class Tools
             };
 
         if (!CarrierServices[carrier].Contains(service))
-            return new { ok = false, error = $"Invalid service for {carrier}" };
+            return new
+            {
+                ok = false,
+                error = $"Invalid service for {carrier}. Use: {string.Join(", ", CarrierServices[carrier])}",
+            };
 
         Store["carrier"] = new { carrier, service };
-        return new { ok = true, next = Steps[1].tool };
+        return new { ok = true, saved = Store["carrier"] };
     }
 
-    [McpServerTool, Description("Step 2: Set service options")]
+    [McpServerTool, Description("Set service options for insurance and signature")]
     public object set_service_options(bool insurance, bool signature)
     {
-        if (!Store.ContainsKey("carrier"))
-            return new { ok = false, error = "Run carrier_create first" };
-
         Store["service_options"] = new { insurance, signature };
-        return new { ok = true, next = Steps[2].tool };
+        return new { ok = true, saved = Store["service_options"] };
     }
 
-    [McpServerTool, Description("Step 3: Set label size")]
+    [McpServerTool, Description("Set label size (4x6 or 6x9)")]
     public object label_set(string label_size)
     {
-        if (!Store.ContainsKey("service_options"))
-            return new { ok = false, error = "Run set_service_options first" };
-
         if (label_size != "4x6" && label_size != "6x9")
-            return new { ok = false, error = "Use: 4x6 or 6x9" };
+            return new { ok = false, error = "Invalid size. Use: 4x6 or 6x9" };
 
         Store["label"] = new { size = label_size };
-        return new { ok = true, next = Steps[3].tool };
+        return new { ok = true, saved = Store["label"] };
     }
 
-    [McpServerTool, Description("Step 4: Set printer")]
+    [McpServerTool, Description("Set printer name")]
     public object printer_set(string printer_name)
     {
-        if (!Store.ContainsKey("label"))
-            return new { ok = false, error = "Run label_set first" };
-
         Store["printer"] = new { name = printer_name };
-        return new { ok = true, next = Steps[4].tool };
+        return new { ok = true, saved = Store["printer"] };
     }
 
-    [McpServerTool, Description("Step 5: Set notification email")]
+    [McpServerTool, Description("Set notification email")]
     public object notification_set(string email)
     {
-        if (!Store.ContainsKey("printer"))
-            return new { ok = false, error = "Run printer_set first" };
-
         Store["notification"] = new { email };
-        return new { ok = true, next = "commit" };
-    }
-
-    [McpServerTool, Description("Reset everything")]
-    public object reset()
-    {
-        Store.Clear();
-        return new { ok = true };
+        return new { ok = true, saved = Store["notification"] };
     }
 }
-
-// -------------------- Model --------------------
-public record SetupStep(string id, string tool, string[] inputs);
