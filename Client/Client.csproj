@@ -4,7 +4,6 @@
  <OutputType>Exe</OutputType>
  <TargetFramework>net10.0</TargetFramework>
  <ImplicitUsings>enable</ImplicitUsings>
- <Nullable>enable</Nullable>
  <UserSecretsId>0030671b-a37a-48b9-95cb-df9b101662f1</UserSecretsId>
  </PropertyGroup>
 
@@ -13,7 +12,7 @@
  <PackageReference Include="Azure.Identity" Version="1.17.0" />
  <PackageReference Include="Microsoft.Extensions.AI" Version="9.10.1" />
  <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="9.10.1-preview.1.25521.4" />
- <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="6.0.1" />
+ <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.0-rc.2.25502.107" />
  <PackageReference Include="ModelContextProtocol" Version="0.4.0-preview.3" />
  </ItemGroup>
 

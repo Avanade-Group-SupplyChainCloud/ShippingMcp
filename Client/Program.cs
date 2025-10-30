@@ -30,14 +30,21 @@ var mcpClient = await McpClient.CreateAsync(transport);
 
 var tools = await mcpClient.ListToolsAsync();
 
-Console.WriteLine();
-Console.WriteLine("=== Interactive Chat Mode ===");
-Console.WriteLine("You can now interact with the MCP tools through natural language.");
-Console.WriteLine("Type 'exit' or 'quit' to end the session.");
-Console.WriteLine();
+// ----------- System Prompt Added Here -----------
+List<ChatMessage> messages =
+[
+    new(
+        ChatRole.System,
+        """
+        You are a shipping configuration assistant.
+        Only use the MCP tools available.
+        If asked what you can do, list the available tools.
+        If asked anything else, respond: "I can only help with shipping configuration."
+        """
+    ),
+];
 
-// Conversational loop that can utilize the tools via prompts
-List<ChatMessage> messages = [];
+// ------------------------------------------------
 
 while (true)
 {

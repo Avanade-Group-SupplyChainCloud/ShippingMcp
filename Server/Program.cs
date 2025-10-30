@@ -1,7 +1,6 @@
 ﻿using System.ComponentModel;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
-using ModelContextProtocol.AspNetCore;
 using ModelContextProtocol.Server;
 
 var builder = WebApplication.CreateBuilder(args);
