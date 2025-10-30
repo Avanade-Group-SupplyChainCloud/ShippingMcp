@@ -1,8 +1,5 @@
-﻿using System.Collections.Concurrent;
-using System.ComponentModel;
-using System.Linq;
+﻿using System.ComponentModel;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.AspNetCore;
 using ModelContextProtocol.Server;
@@ -14,85 +11,43 @@ builder.Services.AddMcpServer().WithHttpTransport().WithToolsFromAssembly();
 
 var app = builder.Build();
 
-// Expose MCP at the root
+// Map MCP
 app.MapMcp();
 
-// (Optional) Add a health check endpoint
-app.MapGet("/health", () => Results.Ok("Healthy ✅ MCP Server is running"));
-
-// Run the server
 app.Run();
 
-/// <summary>
-/// Contains the tool implementations that will be exposed via the MCP server.
-/// </summary>
+// Simple tools without persistence
 [McpServerToolType]
 public class Tools
 {
-    private static readonly ConcurrentDictionary<string, ShippingConfig> Store = new();
-    private const string Key = "current";
     private static readonly string[] AllowedLabelSizes = ["4x6", "6x9"];
 
-    private static readonly Dictionary<string, string[]> CarrierServices = new(
-        StringComparer.OrdinalIgnoreCase
-    )
-    {
-        ["UPS"] = ["Ground", "2Day"],
-        ["FedEx"] = ["Overnight", "Air"],
-    };
-
-    private ShippingConfig GetOrInit() => Store.GetOrAdd(Key, _ => new ShippingConfig());
-
-    private void Save(ShippingConfig cfg) => Store[Key] = cfg;
-
     [McpServerTool]
-    [Description("Create or update the carrier and service.")]
-    public object CreateCarrier(string carrier, string service)
+    [Description("Set carrier and service (no persistence, just echoes).")]
+    public object SetCarrier(string carrier, string service)
     {
-        if (!CarrierServices.TryGetValue(carrier, out var services))
-            throw new ArgumentException(
-                $"Unsupported carrier '{carrier}'. Supported: {string.Join(", ", CarrierServices.Keys)}"
-            );
-
-        if (!services.Any(s => string.Equals(s, service, StringComparison.OrdinalIgnoreCase)))
-            throw new ArgumentException(
-                $"Unsupported service '{service}' for {carrier}. Supported: {string.Join(", ", services)}"
-            );
-
-        var cfg = GetOrInit() with { Carrier = carrier, Service = service };
-        Save(cfg);
-        return new { message = "Carrier and service set.", config = cfg };
+        Console.WriteLine($"Carrier: {carrier}, Service: {service}");
+        return new { message = $"Carrier={carrier}, Service={service}" };
     }
 
     [McpServerTool]
-    [Description("Set label size (4x6 or 6x9).")]
-    public object CreateLabel(string labelSize)
+    [Description("Set label size (4x6 or6x9).")]
+    public object SetLabel(string labelSize)
     {
         var normalized = labelSize?.Trim().ToLowerInvariant();
         if (!AllowedLabelSizes.Contains(normalized ?? ""))
             throw new ArgumentException(
                 $"Invalid size '{labelSize}'. Allowed: {string.Join(", ", AllowedLabelSizes)}"
             );
-
-        var cfg = GetOrInit() with { LabelSize = normalized };
-        Save(cfg);
-        return new { message = "Label size set.", config = cfg };
+        Console.WriteLine($"LabelSize: {normalized}");
+        return new { message = $"LabelSize={normalized}" };
     }
 
     [McpServerTool]
-    [Description("Set insurance required (true / false).")]
-    public object AddInsurance(bool insurance)
+    [Description("Set insurance flag.")]
+    public object SetInsurance(bool insurance)
     {
-        var cfg = GetOrInit() with { InsuranceRequired = insurance };
-        Save(cfg);
-        return new { message = insurance ? "Insurance: YES" : "Insurance: NO", config = cfg };
+        Console.WriteLine($"Insurance: {(insurance ? "YES" : "NO")}");
+        return new { message = insurance ? "Insurance=YES" : "Insurance=NO" };
     }
-}
-
-public record ShippingConfig
-{
-    public string? Carrier { get; init; }
-    public string? Service { get; init; }
-    public string? LabelSize { get; init; }
-    public bool? InsuranceRequired { get; init; }
 }
