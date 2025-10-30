@@ -14,89 +14,21 @@ string apiKey = config["AzureOpenAI:ApiKey"];
 
 Console.WriteLine("Initializing Azure OpenAI client...");
 
-// Create an IChatClient using Azure OpenAI with API key authentication
-IChatClient chatClient;
-try
-{
-    chatClient = new ChatClientBuilder(
-        new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey))
-            .GetChatClient(deployment)
-            .AsIChatClient()
-    )
-        .UseFunctionInvocation()
-        .Build();
+var chatClient = new ChatClientBuilder(
+    new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey))
+        .GetChatClient(deployment)
+        .AsIChatClient()
+)
+    .UseFunctionInvocation()
+    .Build();
 
-    Console.WriteLine("✓ Azure OpenAI client initialized successfully");
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"✗ Failed to initialize Azure OpenAI client: {ex.Message}");
-    Console.WriteLine(
-        "\nPlease update the azureOpenAIEndpoint, deploymentName, and azureOpenAIApiKey in Program.cs"
-    );
-    Console.WriteLine("Press any key to exit...");
-    Console.ReadKey();
-    return;
-}
+var transport = new HttpClientTransport(
+    new HttpClientTransportOptions { Endpoint = new Uri("http://localhost:5000") }
+);
 
-Console.WriteLine();
-Console.WriteLine("Starting MCP Server and connecting client...");
+var mcpClient = await McpClient.CreateAsync(transport);
 
-// Create the MCP client and connect to the MCP server
-// The server runs as a separate process via stdio transport
-IMcpClient mcpClient;
-try
-{
-    // Get the path to the MCP Server project
-    string projectPath = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Server", "Server.csproj")
-    );
-
-    mcpClient = await McpClientFactory.CreateAsync(
-        new StdioClientTransport(
-            new()
-            {
-                Command = "dotnet",
-                Arguments = ["run", "--project", projectPath],
-                Name = "MCP Server",
-            }
-        )
-    );
-
-    Console.WriteLine("✓ Connected to MCP Server successfully");
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"✗ Failed to connect to MCP Server: {ex.Message}");
-    Console.WriteLine("Press any key to exit...");
-    Console.ReadKey();
-    return;
-}
-
-Console.WriteLine();
-Console.WriteLine("Retrieving available tools from MCP Server...");
-
-// List all available tools from the MCP server
-IList<McpClientTool> tools;
-try
-{
-    tools = await mcpClient.ListToolsAsync();
-    Console.WriteLine($"✓ Found {tools.Count} available tools:");
-    Console.WriteLine();
-
-    foreach (McpClientTool tool in tools)
-    {
-        Console.WriteLine($"  • {tool.Name}");
-        Console.WriteLine($"    Description: {tool.Description}");
-    }
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"✗ Failed to retrieve tools: {ex.Message}");
-    Console.WriteLine("Press any key to exit...");
-    Console.ReadKey();
-    return;
-}
+var tools = await mcpClient.ListToolsAsync();
 
 Console.WriteLine();
 Console.WriteLine("=== Interactive Chat Mode ===");

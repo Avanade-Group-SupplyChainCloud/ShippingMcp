@@ -1,18 +1,27 @@
 ﻿using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Linq;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
+using ModelContextProtocol.AspNetCore;
 using ModelContextProtocol.Server;
 
-// Build the host for the MCP server
-HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(settings: null);
+var builder = WebApplication.CreateBuilder(args);
 
-// Configure the MCP server with stdio transport and custom tools
-builder.Services.AddMcpServer().WithStdioServerTransport().WithToolsFromAssembly(); // Automatically discovers all classes marked with [McpServerToolType]
+// Configure MCP with HTTP transport + auto-discovered tools
+builder.Services.AddMcpServer().WithHttpTransport().WithToolsFromAssembly();
+
+var app = builder.Build();
+
+// Expose MCP at the root
+app.MapMcp();
+
+// (Optional) Add a health check endpoint
+app.MapGet("/health", () => Results.Ok("Healthy ✅ MCP Server is running"));
 
 // Run the server
-await builder.Build().RunAsync();
+app.Run();
 
 /// <summary>
 /// Contains the tool implementations that will be exposed via the MCP server.
@@ -36,25 +45,15 @@ public class Tools
 
     private void Save(ShippingConfig cfg) => Store[Key] = cfg;
 
-    /// <summary>
-    /// Creates or updates the shipping carrier and service.
-    /// </summary>
-    /// <param name="carrier">The carrier name (e.g., UPS, FedEx)</param>
-    /// <param name="service">The service type (e.g., Ground, 2Day, Overnight, Air)</param>
-    /// <returns>A confirmation message and the updated config</returns>
     [McpServerTool]
-    [Description(
-        "Create or update the carrier and service. Carrier: UPS/FedEx. Service: Ground/2Day/Overnight/Air."
-    )]
-    public object CreateCarrier(
-        [Description("Carrier name (UPS or FedEx)")] string carrier,
-        [Description("Service (Ground,2Day, Overnight, Air)")] string service
-    )
+    [Description("Create or update the carrier and service.")]
+    public object CreateCarrier(string carrier, string service)
     {
         if (!CarrierServices.TryGetValue(carrier, out var services))
             throw new ArgumentException(
                 $"Unsupported carrier '{carrier}'. Supported: {string.Join(", ", CarrierServices.Keys)}"
             );
+
         if (!services.Any(s => string.Equals(s, service, StringComparison.OrdinalIgnoreCase)))
             throw new ArgumentException(
                 $"Unsupported service '{service}' for {carrier}. Supported: {string.Join(", ", services)}"
@@ -65,19 +64,14 @@ public class Tools
         return new { message = "Carrier and service set.", config = cfg };
     }
 
-    /// <summary>
-    /// Creates or updates the label size for shipping.
-    /// </summary>
-    /// <param name="labelSize">The label size (4x6 or 6x9)</param>
-    /// <returns>A confirmation message and the updated config</returns>
     [McpServerTool]
-    [Description("Create or update the label size. Allowed values:4x6 or6x9.")]
-    public object CreateLabel([Description("Label size (4x6 or6x9)")] string labelSize)
+    [Description("Set label size (4x6 or 6x9).")]
+    public object CreateLabel(string labelSize)
     {
         var normalized = labelSize?.Trim().ToLowerInvariant();
         if (!AllowedLabelSizes.Contains(normalized ?? ""))
             throw new ArgumentException(
-                $"Invalid labelSize '{labelSize}'. Allowed: {string.Join(", ", AllowedLabelSizes)}"
+                $"Invalid size '{labelSize}'. Allowed: {string.Join(", ", AllowedLabelSizes)}"
             );
 
         var cfg = GetOrInit() with { LabelSize = normalized };
@@ -85,24 +79,13 @@ public class Tools
         return new { message = "Label size set.", config = cfg };
     }
 
-    /// <summary>
-    /// Adds or updates the insurance requirement for shipping.
-    /// </summary>
-    /// <param name="insurance">true to require insurance, false otherwise</param>
-    /// <returns>A confirmation message and the updated config</returns>
     [McpServerTool]
-    [Description("Add or update insurance requirement. true = yes, false = no.")]
-    public object AddInsurance([Description("Insurance required (true/false)")] bool insurance)
+    [Description("Set insurance required (true / false).")]
+    public object AddInsurance(bool insurance)
     {
         var cfg = GetOrInit() with { InsuranceRequired = insurance };
         Save(cfg);
-        return new
-        {
-            message = insurance
-                ? "Insurance required set to YES."
-                : "Insurance required set to NO.",
-            config = cfg,
-        };
+        return new { message = insurance ? "Insurance: YES" : "Insurance: NO", config = cfg };
     }
 }
 
@@ -110,6 +93,6 @@ public record ShippingConfig
 {
     public string? Carrier { get; init; }
     public string? Service { get; init; }
-    public string? LabelSize { get; init; } // "4x6" or "6x9"
+    public string? LabelSize { get; init; }
     public bool? InsuranceRequired { get; init; }
 }
